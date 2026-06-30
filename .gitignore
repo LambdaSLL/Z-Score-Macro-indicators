@@ -1,0 +1,15 @@
+# Credenciales locales — nunca commitear
+.env
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# SO
+.DS_Store
+
+# NOTA: data/fred_series.parquet y config/transform_selections.json SÍ se
+# commitean a propósito (el workflow de GitHub Actions y el script
+# scripts/select_transforms.py los actualizan y los suben al repo).
+
