@@ -1,0 +1,36 @@
+name: Refrescar datos de FRED
+
+on:
+  schedule:
+    # Todos los días a las 13:00 UTC (después del cierre de mercado de EE.UU. previo)
+    - cron: "0 13 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  refresh-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Descargar datos de FRED
+        env:
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+        run: python src/fetch_fred.py
+
+      - name: Commit del cache actualizado
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/fred_series.parquet
+          git diff --cached --quiet || git commit -m "Actualizar datos FRED $(date -u +%Y-%m-%d)"
+          git push
+
