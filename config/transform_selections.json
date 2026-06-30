@@ -1,0 +1,90 @@
+{
+  "generated_at": "2026-06-30T16:37:54.380122+00:00",
+  "fred_data_through": "2036-10-01",
+  "selections": {
+    "GDPC1": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "inconclusive",
+      "adf_pvalue": 1.7668656631431014e-06,
+      "kpss_pvalue": 0.01
+    },
+    "INDPRO": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "inconclusive",
+      "adf_pvalue": 2.0322531832453056e-15,
+      "kpss_pvalue": 0.01
+    },
+    "RSAFS": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "inconclusive",
+      "adf_pvalue": 1.503151737846088e-08,
+      "kpss_pvalue": 0.01
+    },
+    "CPIAUCSL_YOY": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 5.976387991627499e-11,
+      "kpss_pvalue": 0.1
+    },
+    "PCEPI_YOY": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 1.0071627249595363e-08,
+      "kpss_pvalue": 0.1
+    },
+    "T5YIE": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 1.060570027947763e-06,
+      "kpss_pvalue": 0.1
+    },
+    "T10YIE": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 6.8140184653685346e-06,
+      "kpss_pvalue": 0.1
+    },
+    "MICH": {
+      "chosen_transform": "level",
+      "indicator_type": "rate",
+      "verdict": "inconclusive",
+      "adf_pvalue": 0.030178180543593683,
+      "kpss_pvalue": 0.01
+    },
+    "PAYEMS": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "inconclusive",
+      "adf_pvalue": 1.191162999618359e-06,
+      "kpss_pvalue": 0.01
+    },
+    "UNRATE": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 1.7934334653580245e-10,
+      "kpss_pvalue": 0.1
+    },
+    "ICSA": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "stationary",
+      "adf_pvalue": 1.3585508277791344e-22,
+      "kpss_pvalue": 0.1
+    },
+    "AHETPI": {
+      "chosen_transform": "logdiff",
+      "indicator_type": "index",
+      "verdict": "non_stationary",
+      "adf_pvalue": 0.34425595057757086,
+      "kpss_pvalue": 0.01
+    }
+  }
+}
