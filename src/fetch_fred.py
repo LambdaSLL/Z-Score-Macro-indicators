@@ -113,17 +113,27 @@ def fetch_all_series(force_refresh: bool = False) -> pd.DataFrame:
     end_date = min(df.index.max(), today)
     full_range = pd.date_range(df.index.min(), end_date, freq="D")
 
-    # Llevar todo a frecuencia diaria, propagando el último valor disponible
+    # Llevar todo a frecuencia diaria, propagando el último valor disponible.
+    # Esto alinea series de frecuencias distintas (trimestral, mensual,
+    # semanal, diaria) en un mismo índice antes de resamplear.
     df = df.reindex(full_range).ffill()
+
+    # Resamplear a frecuencia MENSUAL (último día hábil del mes, "BME" =
+    # business month end), que es la convención estándar en finanzas y la
+    # que usa la literatura macro de referencia (McCracken & Ng 2016,
+    # FRED-MD; CFNAI). Esto es clave para el Z-Score: sin esto, un dato
+    # mensual o trimestral quedaría repetido 30-90 veces en frecuencia
+    # diaria, inflando artificialmente el número de observaciones y
+    # distorsionando media y desviación estándar. La unidad natural de
+    # análisis pasa a ser el MES.
+    df = df.resample("BME").last()
 
     # CPIAUCSL, CPILFESL, PCEPI y PCEPILFE vienen como NIVELES de índice, no
     # como tasas de inflación. Se agregan columnas derivadas con la
-    # variación interanual (%) para poder usarlas directamente como
-    # "inflación esperada/observada" en la Regla de Taylor.
+    # variación interanual (%) — ahora con 12 períodos mensuales = 1 año.
     for level_col in ["CPIAUCSL", "CPILFESL", "PCEPI", "PCEPILFE"]:
         if level_col in df.columns:
-            # 365 pasos diarios ~ 1 año, dado que ya se llevó todo a diario
-            df[f"{level_col}_YOY"] = 100 * df[level_col].pct_change(365)
+            df[f"{level_col}_YOY"] = 100 * df[level_col].pct_change(12)
 
     df.to_parquet(CACHE_FILE)
     return df

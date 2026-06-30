@@ -100,11 +100,11 @@ def apply_candidate_transform(series: pd.Series, transform: str) -> pd.Series:
     if transform == "level":
         return s
     if transform == "diff":
-        return s.diff(365)  # ~1 año, dado que los datos ya están a frecuencia diaria
+        return s.diff(12)  # 12 meses = 1 año (datos ya a frecuencia mensual)
     if transform == "yoy":
-        return 100 * s.pct_change(365)
+        return 100 * s.pct_change(12)
     if transform == "logdiff":
-        return 100 * np.log(s).diff(365)
+        return 100 * np.log(s).diff(12)
     raise ValueError(f"Transformación no reconocida: {transform}")
 
 

@@ -135,20 +135,27 @@ def transformed_indicator_table(df: pd.DataFrame, transform_selections: dict) ->
 # ---------------------------------------------------------------------------
 # Z-Score individual
 # ---------------------------------------------------------------------------
-def rolling_or_full_zscore(series: pd.Series, window_years: int | None = 10) -> pd.Series:
+def rolling_or_full_zscore(series: pd.Series, window_months: int | None = None) -> pd.Series:
     """
-    window_years=None -> normaliza con media/desviación de TODA la muestra.
-    window_years=N    -> normaliza con ventana móvil de N años (recomendado
-                          por el Chicago Fed Letter de 2008 para evitar el
-                          "moving target problem").
+    Calcula el Z-Score de una serie ya en frecuencia MENSUAL.
+
+    window_months=None -> normaliza con media/desviación de TODA la muestra.
+    window_months=N    -> normaliza con ventana móvil de los últimos N meses
+                          de observaciones (12, 24, 36, 60...). Esto es lo
+                          que pedía el PM: con datos mensuales, elegir
+                          explícitamente cuántos meses de historia entran en
+                          la media y la desviación (p. ej. un Z-Score
+                          "anual" usa 12, uno de ciclo usa 24-36).
+
+    Como los datos ya están a frecuencia mensual, N meses = N observaciones,
+    sin conversión de días.
     """
     s = series.dropna()
-    if window_years is None:
+    if window_months is None:
         mean, std = s.mean(), s.std()
     else:
-        window_days = int(window_years * 365)
-        mean = s.rolling(window_days, min_periods=window_days // 2).mean()
-        std = s.rolling(window_days, min_periods=window_days // 2).std()
+        mean = s.rolling(window_months, min_periods=max(3, window_months // 2)).mean()
+        std = s.rolling(window_months, min_periods=max(3, window_months // 2)).std()
     z = (s - mean) / std
     z.name = f"{series.name}_z"
     return z
@@ -171,10 +178,14 @@ def category_zscore(
     category: str,
     transform_selections: dict,
     weights: dict[str, float] | None = None,
-    window_years: int | None = 10,
+    window_months: int | None = None,
 ) -> dict:
     """
     Calcula el Z-Score de una categoría con doble estandarización.
+
+    window_months: ventana (en meses) para la media/desviación de los
+    Z-Scores individuales. None = muestra completa. Ver
+    rolling_or_full_zscore().
 
     Returns
     -------
@@ -197,7 +208,7 @@ def category_zscore(
             continue
         transform = transform_selections[code]["chosen_transform"]
         raw = apply_candidate_transform(df[code], transform)
-        z = rolling_or_full_zscore(raw, window_years=window_years)
+        z = rolling_or_full_zscore(raw, window_months=window_months)
         z_components[code] = z * cfg["sign"]
 
     z_df = pd.concat(z_components, axis=1)

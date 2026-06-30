@@ -46,8 +46,8 @@ def r_star_long_run_growth(df: pd.DataFrame, window_years: int = 10) -> pd.Serie
     que han bajado r* estructuralmente desde los 1980s.
     """
     real = df["GDPC1"].dropna()
-    yoy_growth = 100 * real.pct_change(4)
-    r_star = yoy_growth.rolling(window=window_years * 4, min_periods=8).mean()
+    yoy_growth = 100 * real.pct_change(12)  # interanual; datos ya mensuales
+    r_star = yoy_growth.rolling(window=window_years * 12, min_periods=24).mean()
     r_star.name = "r_star_long_run_growth"
     return r_star
 

@@ -354,15 +354,14 @@ with tab1:
 
     st.subheader("Tabla histórica (mensual) de indicadores ya transformados")
     indicator_table = transformed_indicator_table(df, transform_selections)
-    monthly_table = indicator_table.resample("ME").last()
     rename_map = {
         code: cfg["label"]
         for cat in CATEGORY_DEFINITIONS.values()
         for code, cfg in cat.items()
     }
-    monthly_display = monthly_table.rename(columns=rename_map).round(2)
+    monthly_display = indicator_table.rename(columns=rename_map).round(2)
     st.dataframe(monthly_display.tail(24).sort_index(ascending=False), use_container_width=True)
-    st.caption("Mostrando los últimos 24 meses; la tabla completa se usa internamente para el cálculo.")
+    st.caption("Mostrando los últimos 24 meses; la tabla completa se usa internamente para el cálculo. Los datos ya están en frecuencia mensual (último día hábil del mes).")
 
     st.subheader("Pesos por categoría (deben sumar 1 dentro de cada eje)")
     st.caption(
@@ -370,15 +369,26 @@ with tab1:
         "hacen — el valor normalizado real usado se muestra abajo de cada columna."
     )
 
-    zscore_window_option = st.radio(
-        "Ventana para calcular media/desviación estándar",
-        options=["Muestra completa", "Ventana móvil (años)"],
-        horizontal=True,
+    st.subheader("Ventana del Z-Score (en meses)")
+    st.caption(
+        "Define cuántos meses de historia entran en la media y la desviación "
+        "estándar de cada indicador. Una ventana corta (6-12m) mide qué tan "
+        "extremo es algo respecto al comportamiento reciente; una larga o la "
+        "muestra completa lo mide respecto a toda la historia. No hay un valor "
+        "'correcto' — depende de tu horizonte de análisis."
     )
-    zscore_window_years = (
-        st.slider("Años de la ventana móvil", 5, 20, 10)
-        if zscore_window_option == "Ventana móvil (años)" else None
+    window_choice = st.radio(
+        "Ventana móvil",
+        options=["6 meses", "12 meses", "24 meses", "36 meses", "60 meses", "Muestra completa", "Personalizado"],
+        index=2, horizontal=True,
     )
+    _window_map = {"6 meses": 6, "12 meses": 12, "24 meses": 24, "36 meses": 36, "60 meses": 60, "Muestra completa": None}
+    if window_choice == "Personalizado":
+        zscore_window_months = st.number_input(
+            "Meses de la ventana móvil", min_value=3, max_value=360, value=24, step=1
+        )
+    else:
+        zscore_window_months = _window_map[window_choice]
 
     indicator_weights_by_category = {}
     cols = st.columns(3)
@@ -445,7 +455,7 @@ with tab1:
 # Cálculo común (usado en tabs 2 y 3)
 # ---------------------------------------------------------------------------
 category_results = {
-    cat: category_zscore(df, cat, transform_selections, indicator_weights_by_category[cat], zscore_window_years)
+    cat: category_zscore(df, cat, transform_selections, indicator_weights_by_category[cat], zscore_window_months)
     for cat in ["growth", "inflation", "employment"]
 }
 master = master_zscore(category_results, category_weights)

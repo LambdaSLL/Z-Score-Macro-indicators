@@ -31,7 +31,7 @@ def output_gap_cbo(df: pd.DataFrame) -> pd.Series:
     return gap
 
 
-def output_gap_hp_filter(df: pd.DataFrame, lamb: float = 1600) -> pd.Series:
+def output_gap_hp_filter(df: pd.DataFrame, lamb: float = 129600) -> pd.Series:
     """
     Método 2: filtro de Hodrick-Prescott aplicado al log del PIB real para
     extraer la tendencia (proxy del producto potencial) y obtener el gap
@@ -40,9 +40,12 @@ def output_gap_hp_filter(df: pd.DataFrame, lamb: float = 1600) -> pd.Series:
         log(GDPC1) = tendencia_HP + ciclo_HP
         gap_t = 100 * ciclo_HP_t
 
-    lamb=1600 es el valor estándar para datos trimestrales (Hodrick-Prescott,
-    1997). Ventaja: no depende de estimaciones externas (CBO). Desventaja:
-    sensible al final de la muestra ("end-point problem") y a lamb elegido.
+    lamb=129600 es el valor estándar para datos MENSUALES (Ravn & Uhlig,
+    2002, que ajustan el 1600 de Hodrick-Prescott trimestral por la cuarta
+    potencia de la razón de frecuencias: 1600 * 3^4 = 129600). Como los
+    datos del proyecto ya están en frecuencia mensual, se usa este valor.
+    Ventaja: no depende de estimaciones externas (CBO). Desventaja: sensible
+    al final de la muestra ("end-point problem") y a lamb elegido.
     """
     log_gdp = np.log(df["GDPC1"].dropna())
     cycle, trend = hpfilter(log_gdp, lamb=lamb)
@@ -86,8 +89,8 @@ def output_growth_gap_paper(df: pd.DataFrame, lookback_years: int = 10) -> pd.Se
     especificación exacta de la ecuación (A1) del paper.
     """
     real = df["GDPC1"].dropna()
-    yoy_growth = 100 * real.pct_change(4)  # crecimiento interanual (datos trimestrales)
-    trend_growth = yoy_growth.rolling(window=lookback_years * 4, min_periods=8).mean()
+    yoy_growth = 100 * real.pct_change(12)  # interanual; datos ya mensuales
+    trend_growth = yoy_growth.rolling(window=lookback_years * 12, min_periods=24).mean()
     gap = yoy_growth - trend_growth
     gap.name = "output_growth_gap_paper"
     return gap
