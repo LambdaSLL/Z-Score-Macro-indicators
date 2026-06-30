@@ -52,7 +52,7 @@ SERIES_MAP = {
     "GDPPOT": "GDPPOT",       # PIB potencial (estimado por CBO), trimestral
     "UNRATE": "UNRATE",       # tasa de desempleo, mensual
     "NROU": "NROU",           # tasa natural de desempleo (CBO), trimestral
-    "CPMFTOT": "CUMFNS",      # tasa de utilización de capacidad (sustituto de CPMFTOT de Bloomberg)
+    "CUMFNS": "CUMFNS",        # tasa de utilización de capacidad (sustituto de CPMFTOT de Bloomberg)
     "INDPRO": "INDPRO",       # producción industrial, mensual
     "RSAFS": "RSAFS",         # ventas minoristas, mensual
 
