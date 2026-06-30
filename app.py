@@ -32,6 +32,7 @@ from src.zscore_indicators import (
     select_transforms_for_all_indicators, transformed_indicator_table,
     category_zscore, master_zscore, decompose_at_date,
 )
+from src.transform_config import load_transform_config
 
 st.set_page_config(page_title="Taylor Rule & Curva del Tesoro", layout="wide")
 
@@ -277,12 +278,41 @@ st.caption(
 )
 
 
-@st.cache_data(show_spinner="Corriendo pruebas ADF/KPSS por indicador...")
-def _cached_transform_selection(data_fingerprint):
+@st.cache_data(show_spinner="Corriendo pruebas ADF/KPSS por indicador (no hay config congelado)...")
+def _cached_live_transform_selection(data_fingerprint):
     return select_transforms_for_all_indicators(df)
 
 
-transform_selections = _cached_transform_selection(df.index.max())
+_frozen_config = load_transform_config()
+if _frozen_config is not None:
+    transform_selections = _frozen_config["selections"]
+    transform_source_msg = (
+        f"Usando transformaciones CONGELADAS (config/transform_selections.json), "
+        f"generadas el {_frozen_config['generated_at'][:10]} con datos hasta "
+        f"{_frozen_config['fred_data_through']}. No se corrieron pruebas ADF/KPSS "
+        f"en esta sesión — la app queda liviana."
+    )
+else:
+    live_selections = _cached_live_transform_selection(df.index.max())
+    # Normalizar al mismo formato plano que el config congelado, para que el
+    # resto del código (tabla de la pestaña 1, category_zscore) no necesite
+    # distinguir entre las dos fuentes.
+    transform_selections = {
+        code: {
+            "chosen_transform": sel["chosen_transform"],
+            "indicator_type": sel["indicator_type"],
+            "verdict": sel["results"].get(sel["chosen_transform"], {}).get("verdict"),
+            "adf_pvalue": sel["results"].get(sel["chosen_transform"], {}).get("adf_pvalue"),
+            "kpss_pvalue": sel["results"].get(sel["chosen_transform"], {}).get("kpss_pvalue"),
+        }
+        for code, sel in live_selections.items()
+    }
+    transform_source_msg = (
+        "No se encontró config/transform_selections.json — se calcularon las "
+        "pruebas ADF/KPSS EN VIVO en esta sesión. Para que la app quede liviana, "
+        "corre `python scripts/select_transforms.py` (en Colab o local) y haz "
+        "commit del archivo generado."
+    )
 
 CATEGORY_LABELS = {"growth": "Crecimiento", "inflation": "Inflación", "employment": "Empleo"}
 
@@ -300,6 +330,11 @@ with tab1:
         "(tasa vs. índice con tendencia) y se elige la menos agresiva que "
         "resulte estadísticamente estacionaria — ver src/stationarity.py."
     )
+    if _frozen_config is not None:
+        st.success(transform_source_msg)
+    else:
+        st.warning(transform_source_msg)
+
     rows = []
     for category, indicators in CATEGORY_DEFINITIONS.items():
         for code, cfg in indicators.items():
@@ -307,16 +342,13 @@ with tab1:
                 continue
             sel = transform_selections[code]
             chosen = sel["chosen_transform"]
-            verdict = sel["results"].get(chosen, {}).get("verdict", "n/a")
-            adf_p = sel["results"].get(chosen, {}).get("adf_pvalue")
-            kpss_p = sel["results"].get(chosen, {}).get("kpss_pvalue")
             rows.append({
                 "Categoría": CATEGORY_LABELS[category],
                 "Indicador": cfg["label"],
                 "Transformación elegida": TRANSFORM_LABELS.get(chosen, chosen),
-                "Veredicto": verdict,
-                "p-valor ADF": round(adf_p, 3) if adf_p is not None else None,
-                "p-valor KPSS": round(kpss_p, 3) if kpss_p is not None else None,
+                "Veredicto": sel.get("verdict", "n/a"),
+                "p-valor ADF": round(sel["adf_pvalue"], 3) if sel.get("adf_pvalue") is not None else None,
+                "p-valor KPSS": round(sel["kpss_pvalue"], 3) if sel.get("kpss_pvalue") is not None else None,
             })
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
