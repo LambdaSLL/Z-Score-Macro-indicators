@@ -1,62 +1,82 @@
 """
 zscore_indicators.py
 ---------------------
-Construye un indicador Z-Score compuesto de desviación macro, siguiendo la
-misma lógica que el Chicago Fed National Activity Index (CFNAI) y el
-Aruoba-Diebold-Scotti (ADS) Index, pero simplificado en 3 sub-índices
-(crecimiento, inflación, empleo) con PESOS LIBRES definidos por el usuario
-(PM), en vez de pesos fijados por PCA.
+Construye un indicador Z-Score compuesto de desviación macro en DOS
+niveles de estandarización, siguiendo la misma lógica que el Chicago Fed
+National Activity Index (CFNAI) y el Aruoba-Diebold-Scotti (ADS) Index:
+
+  Nivel 1: cada indicador individual se transforma (según la transformación
+           que las pruebas ADF/KPSS determinen como la más adecuada, ver
+           stationarity.py) y se estandariza a su propio Z-Score.
+
+  Nivel 2: los Z-Scores individuales de una categoría (crecimiento,
+           inflación, empleo) se combinan en un promedio ponderado (pesos
+           que el PM define y que deben sumar 1 dentro de cada categoría),
+           y ESE PROMEDIO PONDERADO SE VUELVE A ESTANDARIZAR — porque un
+           promedio ponderado de Z-Scores correlacionados no tiene
+           automáticamente desviación estándar 1. Así se obtiene el
+           Z-Score de categoría.
+
+  Nivel 3: los 3 Z-Scores de categoría se combinan con un peso libre entre
+           ellos (p. ej. 0.4/0.4/0.2) y ESE COMPUESTO TAMBIÉN SE
+           RE-ESTANDARIZA, dando el Z-Score maestro final.
+
+Cada nivel de combinación incluye una función de DESCOMPOSICIÓN que
+reparte el Z-Score final entre sus componentes (cuánto aportó cada
+indicador / cada categoría a la desviación observada), para poder explicar
+"por qué" el índice está donde está.
 
 Referencias metodológicas:
-- Stock, J. H., & Watson, M. W. (1999). Forecasting inflation. Journal of
-  Monetary Economics, 44(2), 293-335. (origen del enfoque de "factor común"
-  vía estandarización + ponderación que usa el CFNAI)
-- Federal Reserve Bank of Chicago. "Background on the CFNAI": cada serie se
-  transforma, se de-media y se estandariza (z-score) antes de ponderar.
-- Aruoba, S. B., Diebold, F. X., & Scotti, C. (2009). Real-Time Measurement
-  of Business Conditions. Journal of Business and Economic Statistics,
-  27(4), 417-427.
+- Stock, J. H., & Watson, M. W. (1999). Forecasting inflation. JME 44(2).
+- McCracken, M. W., & Ng, S. (2016). FRED-MD: A monthly database for
+  macroeconomic research. JBES 34(4), 574-589. (selección de
+  transformación por serie, ver stationarity.py)
+- Aruoba, S. B., Diebold, F. X., & Scotti, C. (2009). Real-Time
+  Measurement of Business Conditions. JBES 27(4), 417-427.
+- Federal Reserve Bank of Chicago, "Background on the CFNAI": doble
+  estandarización (componentes y compuesto final ambos a media 0 / sd 1).
 
-Diferencia deliberada con el CFNAI: aquí los pesos NO se estiman vía PCA,
-sino que quedan 100% en manos del usuario, en línea con la filosofía de
-calibración libre usada en taylor_rule.py.
+Diferencia deliberada con el CFNAI: los pesos NO se estiman vía PCA, sino
+que quedan 100% en manos del usuario (PM).
 """
 
 from __future__ import annotations
-from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
+
+from src.stationarity import select_best_transform, apply_candidate_transform
 
 
 # ---------------------------------------------------------------------------
 # Definición de indicadores por categoría
 # ---------------------------------------------------------------------------
-# transform: "level" (usar el nivel tal cual, ya en %), "yoy" (variación
-#            interanual %), "mom_diff" (variación mensual en nivel),
-#            "mom_pct" (variación mensual %)
+# indicator_type: "rate" (ya en %, p. ej. desempleo, breakevens) o "index"
+#                 (nivel con tendencia, p. ej. PIB, producción, nóminas).
+#                 Determina qué transformaciones candidatas se prueban
+#                 (ver stationarity.py: RATE_CANDIDATES / INDEX_CANDIDATES).
 # sign: 1 si "más alto = mejor" para esa categoría, -1 si "más alto = peor"
-#       (p. ej. desempleo o solicitudes de desempleo deben invertirse)
+#       (p. ej. desempleo o solicitudes de desempleo deben invertirse).
 
 GROWTH_INDICATORS = {
-    "GDPC1":   {"transform": "yoy",      "sign": 1, "label": "PIB real (YoY %)"},
-    "INDPRO":  {"transform": "yoy",      "sign": 1, "label": "Producción industrial (YoY %)"},
-    "RSAFS":   {"transform": "yoy",      "sign": 1, "label": "Ventas minoristas (YoY %)"},
-    "CUMFNS":  {"transform": "level",    "sign": 1, "label": "Utilización de capacidad (%)"},
+    "GDPC1":   {"indicator_type": "index", "sign": 1, "label": "PIB real"},
+    "INDPRO":  {"indicator_type": "index", "sign": 1, "label": "Producción industrial"},
+    "RSAFS":   {"indicator_type": "index", "sign": 1, "label": "Ventas minoristas"},
+    "CUMFNS":  {"indicator_type": "rate",  "sign": 1, "label": "Utilización de capacidad"},
 }
 
 INFLATION_INDICATORS = {
-    "CPIAUCSL_YOY": {"transform": "level", "sign": 1, "label": "CPI total (YoY %)"},
-    "PCEPI_YOY":    {"transform": "level", "sign": 1, "label": "PCE (YoY %)"},
-    "T5YIE":        {"transform": "level", "sign": 1, "label": "Breakeven inflación 5y (%)"},
-    "T10YIE":       {"transform": "level", "sign": 1, "label": "Breakeven inflación 10y (%)"},
-    "MICH":         {"transform": "level", "sign": 1, "label": "Expectativas U. Michigan 1y (%)"},
+    "CPIAUCSL_YOY": {"indicator_type": "rate", "sign": 1, "label": "CPI total (YoY %)"},
+    "PCEPI_YOY":    {"indicator_type": "rate", "sign": 1, "label": "PCE (YoY %)"},
+    "T5YIE":        {"indicator_type": "rate", "sign": 1, "label": "Breakeven inflación 5y"},
+    "T10YIE":       {"indicator_type": "rate", "sign": 1, "label": "Breakeven inflación 10y"},
+    "MICH":         {"indicator_type": "rate", "sign": 1, "label": "Expectativas U. Michigan 1y"},
 }
 
 EMPLOYMENT_INDICATORS = {
-    "PAYEMS":  {"transform": "mom_diff", "sign": 1,  "label": "Cambio mensual nóminas (miles)"},
-    "UNRATE":  {"transform": "level",    "sign": -1, "label": "Tasa de desempleo (%, invertida)"},
-    "ICSA":    {"transform": "level",    "sign": -1, "label": "Solicitudes desempleo semanal (invertida)"},
-    "AHETPI":  {"transform": "yoy",      "sign": 1,  "label": "Salario promedio por hora (YoY %, invertido por inflación opcional)"},
+    "PAYEMS":  {"indicator_type": "index", "sign": 1,  "label": "Nóminas no agrícolas"},
+    "UNRATE":  {"indicator_type": "rate",  "sign": -1, "label": "Tasa de desempleo (invertida)"},
+    "ICSA":    {"indicator_type": "index", "sign": -1, "label": "Solicitudes desempleo semanal (invertida)"},
+    "AHETPI":  {"indicator_type": "index", "sign": 1,  "label": "Salario promedio por hora"},
 }
 
 CATEGORY_DEFINITIONS = {
@@ -65,120 +85,202 @@ CATEGORY_DEFINITIONS = {
     "employment": EMPLOYMENT_INDICATORS,
 }
 
-
-def apply_transform(series: pd.Series, transform: str) -> pd.Series:
-    """Aplica la transformación definida para un indicador dado."""
-    s = series.dropna()
-    if transform == "level":
-        return s
-    if transform == "yoy":
-        return 100 * s.pct_change(365)  # datos ya llevados a frecuencia diaria
-    if transform == "mom_diff":
-        return s.diff(30)
-    if transform == "mom_pct":
-        return 100 * s.pct_change(30)
-    raise ValueError(f"Transformación no reconocida: {transform}")
+TRANSFORM_LABELS = {
+    "level": "Nivel (sin transformar)",
+    "diff": "Diferencia anual (nivel)",
+    "yoy": "Variación interanual (%)",
+    "logdiff": "Log-diferencia anual (%)",
+}
 
 
+# ---------------------------------------------------------------------------
+# Selección de transformaciones (ADF/KPSS) — se corre una vez y se cachea
+# ---------------------------------------------------------------------------
+def select_transforms_for_all_indicators(df: pd.DataFrame) -> dict:
+    """
+    Corre select_best_transform() para cada indicador de las 3 categorías.
+
+    Returns
+    -------
+    dict {code: {"chosen_transform": str, "results": {...}, "indicator_type": str}}
+    """
+    selections = {}
+    for category, indicators in CATEGORY_DEFINITIONS.items():
+        for code, cfg in indicators.items():
+            if code not in df.columns:
+                continue
+            outcome = select_best_transform(df[code], cfg["indicator_type"])
+            outcome["indicator_type"] = cfg["indicator_type"]
+            selections[code] = outcome
+    return selections
+
+
+def transformed_indicator_table(df: pd.DataFrame, transform_selections: dict) -> pd.DataFrame:
+    """
+    Construye una tabla con la serie YA TRANSFORMADA (según la transform
+    elegida por ADF/KPSS) para cada indicador de las 3 categorías, en una
+    sola tabla — esta es la tabla histórica "ordenada por mes" que pide la
+    pestaña 1.
+    """
+    columns = {}
+    for category, indicators in CATEGORY_DEFINITIONS.items():
+        for code, cfg in indicators.items():
+            if code not in df.columns or code not in transform_selections:
+                continue
+            transform = transform_selections[code]["chosen_transform"]
+            columns[code] = apply_candidate_transform(df[code], transform)
+    return pd.concat(columns, axis=1)
+
+
+# ---------------------------------------------------------------------------
+# Z-Score individual
+# ---------------------------------------------------------------------------
 def rolling_or_full_zscore(series: pd.Series, window_years: int | None = 10) -> pd.Series:
     """
-    Calcula el Z-Score de una serie.
-
-    window_years=None  -> normaliza con la media/desviación de TODA la
-                            muestra disponible (estilo CFNAI estándar).
-    window_years=N      -> normaliza con una ventana móvil de N años, para
-                            permitir que la "normalidad" se ajuste con el
-                            tiempo (recomendado por el Chicago Fed Letter de
-                            2008 para evitar el "moving target problem").
+    window_years=None -> normaliza con media/desviación de TODA la muestra.
+    window_years=N    -> normaliza con ventana móvil de N años (recomendado
+                          por el Chicago Fed Letter de 2008 para evitar el
+                          "moving target problem").
     """
     s = series.dropna()
     if window_years is None:
-        mean = s.mean()
-        std = s.std()
-        z = (s - mean) / std
+        mean, std = s.mean(), s.std()
     else:
         window_days = int(window_years * 365)
         mean = s.rolling(window_days, min_periods=window_days // 2).mean()
         std = s.rolling(window_days, min_periods=window_days // 2).std()
-        z = (s - mean) / std
+    z = (s - mean) / std
     z.name = f"{series.name}_z"
     return z
 
 
-def _weighted_avg_ignore_nan(z_df: pd.DataFrame, weights: dict[str, float]) -> pd.Series:
-    """
-    Promedio ponderado fila a fila, ignorando NaN y renormalizando los
-    pesos disponibles en cada fecha (para que un dato faltante puntual no
-    tumbe todo el índice a NaN).
-    """
-    w = pd.Series(weights).reindex(z_df.columns).fillna(0.0)
-    weighted = z_df.mul(w, axis=1)
-    available_weight = z_df.notna().mul(w, axis=1).sum(axis=1)
-    combined = weighted.sum(axis=1) / available_weight.replace(0, np.nan)
-    return combined
+def _normalize_weights(weights: dict[str, float]) -> pd.Series:
+    """Normaliza los pesos para que sumen 1 (avisa al llamador si no sumaban 1)."""
+    w = pd.Series(weights, dtype=float)
+    total = w.sum()
+    if total <= 0:
+        raise ValueError("La suma de los pesos debe ser positiva.")
+    return w / total
 
 
+# ---------------------------------------------------------------------------
+# Z-Score de categoría (Nivel 2, con doble estandarización)
+# ---------------------------------------------------------------------------
 def category_zscore(
     df: pd.DataFrame,
     category: str,
+    transform_selections: dict,
     weights: dict[str, float] | None = None,
     window_years: int | None = 10,
-) -> tuple[pd.Series, pd.DataFrame]:
+) -> dict:
     """
-    Calcula el Z-Score compuesto de una categoría (growth/inflation/employment).
+    Calcula el Z-Score de una categoría con doble estandarización.
 
     Returns
     -------
-    (serie_z_compuesta, dataframe_con_z_individuales)
+    dict con:
+      - "individual_z": DataFrame de Z-Scores individuales (uno por indicador)
+      - "weights_normalized": pd.Series de pesos ya normalizados (suman 1)
+      - "raw_composite": pd.Series, promedio ponderado de Z-Scores (antes de re-estandarizar)
+      - "category_zscore": pd.Series, EL Z-SCORE FINAL de la categoría (re-estandarizado)
+      - "contributions": DataFrame, aporte de cada indicador al category_zscore en cada fecha
+      - "baseline": float, término constante de ajuste de media (ver decomposición)
     """
     config = CATEGORY_DEFINITIONS[category]
     if weights is None:
         weights = {code: 1.0 for code in config}
+    w = _normalize_weights(weights)
 
     z_components = {}
     for code, cfg in config.items():
-        if code not in df.columns:
+        if code not in df.columns or code not in transform_selections:
             continue
-        raw = apply_transform(df[code], cfg["transform"])
+        transform = transform_selections[code]["chosen_transform"]
+        raw = apply_candidate_transform(df[code], transform)
         z = rolling_or_full_zscore(raw, window_years=window_years)
         z_components[code] = z * cfg["sign"]
 
     z_df = pd.concat(z_components, axis=1)
-    composite = _weighted_avg_ignore_nan(z_df, weights)
-    composite.name = f"{category}_zscore"
-    return composite, z_df
+    w_aligned = w.reindex(z_df.columns).fillna(0.0)
+
+    # Nivel 2a: promedio ponderado de Z-Scores individuales (ignorando NaN puntuales)
+    weighted = z_df.mul(w_aligned, axis=1)
+    available_weight = z_df.notna().mul(w_aligned, axis=1).sum(axis=1)
+    raw_composite = weighted.sum(axis=1) / available_weight.replace(0, np.nan)
+
+    # Nivel 2b: RE-ESTANDARIZAR el compuesto ponderado (la "doble estandarización")
+    mean_c, std_c = raw_composite.mean(), raw_composite.std()
+    category_z = (raw_composite - mean_c) / std_c
+    category_z.name = f"{category}_zscore"
+
+    # Descomposición: contribution_i_t = w_i * z_i_t / std_c, de forma que
+    # sum_i(contribution_i_t) + baseline == category_z_t exactamente.
+    contributions = weighted.div(std_c)
+    baseline = -mean_c / std_c
+
+    return {
+        "individual_z": z_df,
+        "weights_normalized": w_aligned,
+        "raw_composite": raw_composite,
+        "category_zscore": category_z,
+        "contributions": contributions,
+        "baseline": baseline,
+    }
 
 
+# ---------------------------------------------------------------------------
+# Z-Score maestro (Nivel 3, también con doble estandarización)
+# ---------------------------------------------------------------------------
 def master_zscore(
-    growth_z: pd.Series,
-    inflation_z: pd.Series,
-    employment_z: pd.Series,
+    category_results: dict[str, dict],
     weights: dict[str, float] | None = None,
-) -> pd.Series:
+) -> dict:
     """
-    Combina los 3 sub-índices en un único Z-Score maestro de desviación
-    macro, con pesos libres entre categorías.
+    Combina los 3 Z-Scores de categoría (ya re-estandarizados) en un único
+    Z-Score maestro, también re-estandarizado, con pesos libres entre
+    categorías.
+
+    Parameters
+    ----------
+    category_results : dict {"growth": resultado de category_zscore(...), ...}
+    weights : pesos entre categorías (p. ej. {"growth": 0.2, "inflation": 0.4, "employment": 0.4})
     """
     if weights is None:
-        weights = {"growth": 1.0, "inflation": 1.0, "employment": 1.0}
+        weights = {k: 1.0 for k in category_results}
+    w = _normalize_weights(weights)
 
-    combined_df = pd.concat(
-        {"growth": growth_z, "inflation": inflation_z, "employment": employment_z}, axis=1
+    cat_z = pd.concat(
+        {cat: res["category_zscore"] for cat, res in category_results.items()}, axis=1
     )
-    master = _weighted_avg_ignore_nan(combined_df, weights)
-    master.name = "master_zscore"
-    return master
+    w_aligned = w.reindex(cat_z.columns).fillna(0.0)
+
+    weighted = cat_z.mul(w_aligned, axis=1)
+    available_weight = cat_z.notna().mul(w_aligned, axis=1).sum(axis=1)
+    raw_composite = weighted.sum(axis=1) / available_weight.replace(0, np.nan)
+
+    mean_c, std_c = raw_composite.mean(), raw_composite.std()
+    master_z = (raw_composite - mean_c) / std_c
+    master_z.name = "master_zscore"
+
+    contributions = weighted.div(std_c)
+    baseline = -mean_c / std_c
+
+    return {
+        "weights_normalized": w_aligned,
+        "raw_composite": raw_composite,
+        "master_zscore": master_z,
+        "contributions": contributions,
+        "baseline": baseline,
+    }
 
 
-def interpret_zscore(value: float) -> str:
-    """Traduce el valor del Z-Score maestro en una lectura cualitativa simple."""
-    if value >= 1.5:
-        return "Muy por encima del promedio histórico (fuerte expansión / sobrecalentamiento)"
-    elif value >= 0.5:
-        return "Por encima del promedio histórico (expansión moderada)"
-    elif value > -0.5:
-        return "Cercano al promedio histórico (crecimiento en línea con tendencia)"
-    elif value > -1.5:
-        return "Por debajo del promedio histórico (debilidad moderada)"
-    else:
-        return "Muy por debajo del promedio histórico (contracción / señal de alerta)"
+def decompose_at_date(contributions: pd.DataFrame, baseline: float, date) -> pd.Series:
+    """
+    Extrae la descomposición (aportes de cada componente) para una fecha
+    específica, lista para graficar como barras. Incluye el baseline como
+    una entrada más, de forma que la suma de todas las barras reproduce
+    exactamente el Z-Score final de esa fecha.
+    """
+    row = contributions.loc[date].copy()
+    row["(ajuste de media histórica)"] = baseline
+    return row.sort_values()
