@@ -20,6 +20,7 @@ sys.path.append(str(Path(__file__).resolve().parent))
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 
 from src.fetch_fred import fetch_all_series, latest_value
@@ -27,7 +28,9 @@ from src.output_gap import all_output_gap_estimates
 from src.r_star import all_r_star_estimates, fetch_rstar_nyfed, DEFAULT_RSTAR_FALLBACK
 from src.taylor_rule import TaylorRuleParams, taylor_rate, taylor_rate_timeseries, qualitative_signal
 from src.zscore_indicators import (
-    CATEGORY_DEFINITIONS, category_zscore, master_zscore, interpret_zscore
+    CATEGORY_DEFINITIONS, TRANSFORM_LABELS,
+    select_transforms_for_all_indicators, transformed_indicator_table,
+    category_zscore, master_zscore, decompose_at_date,
 )
 
 st.set_page_config(page_title="Taylor Rule & Curva del Tesoro", layout="wide")
@@ -266,88 +269,287 @@ st.caption(
 st.header("4. Indicador Z-Score compuesto de desviación macro")
 st.caption(
     "Misma lógica que el Chicago Fed National Activity Index (CFNAI) y el "
-    "ADS Index (Aruoba, Diebold & Scotti, 2009): cada serie se estandariza "
-    "(z-score) y se combina en un promedio ponderado. A diferencia del "
-    "CFNAI, aquí los pesos son 100% definidos por el usuario, no por PCA."
+    "ADS Index (Aruoba, Diebold & Scotti, 2009), con doble estandarización: "
+    "cada indicador se transforma (la transformación se elige automáticamente "
+    "mediante pruebas ADF/KPSS, no una regla única) y se estandariza; el "
+    "compuesto ponderado de cada categoría se vuelve a estandarizar; y el "
+    "compuesto entre categorías también se re-estandariza al final."
 )
 
-with st.expander("Configurar ventana de normalización y pesos", expanded=False):
+
+@st.cache_data(show_spinner="Corriendo pruebas ADF/KPSS por indicador...")
+def _cached_transform_selection(data_fingerprint):
+    return select_transforms_for_all_indicators(df)
+
+
+transform_selections = _cached_transform_selection(df.index.max())
+
+CATEGORY_LABELS = {"growth": "Crecimiento", "inflation": "Inflación", "employment": "Empleo"}
+
+tab1, tab2, tab3 = st.tabs([
+    "1. Datos y pesos", "2. Z-Scores individuales y descomposición", "3. Índice global",
+])
+
+# =============================================================================
+# TAB 1 — Datos históricos, transformación elegida, pesos
+# =============================================================================
+with tab1:
+    st.subheader("Transformación elegida por indicador (ADF/KPSS)")
+    st.caption(
+        "Cada indicador prueba 2-4 transformaciones candidatas según su tipo "
+        "(tasa vs. índice con tendencia) y se elige la menos agresiva que "
+        "resulte estadísticamente estacionaria — ver src/stationarity.py."
+    )
+    rows = []
+    for category, indicators in CATEGORY_DEFINITIONS.items():
+        for code, cfg in indicators.items():
+            if code not in transform_selections:
+                continue
+            sel = transform_selections[code]
+            chosen = sel["chosen_transform"]
+            verdict = sel["results"].get(chosen, {}).get("verdict", "n/a")
+            adf_p = sel["results"].get(chosen, {}).get("adf_pvalue")
+            kpss_p = sel["results"].get(chosen, {}).get("kpss_pvalue")
+            rows.append({
+                "Categoría": CATEGORY_LABELS[category],
+                "Indicador": cfg["label"],
+                "Transformación elegida": TRANSFORM_LABELS.get(chosen, chosen),
+                "Veredicto": verdict,
+                "p-valor ADF": round(adf_p, 3) if adf_p is not None else None,
+                "p-valor KPSS": round(kpss_p, 3) if kpss_p is not None else None,
+            })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    st.subheader("Tabla histórica (mensual) de indicadores ya transformados")
+    indicator_table = transformed_indicator_table(df, transform_selections)
+    monthly_table = indicator_table.resample("ME").last()
+    rename_map = {
+        code: cfg["label"]
+        for cat in CATEGORY_DEFINITIONS.values()
+        for code, cfg in cat.items()
+    }
+    monthly_display = monthly_table.rename(columns=rename_map).round(2)
+    st.dataframe(monthly_display.tail(24).sort_index(ascending=False), use_container_width=True)
+    st.caption("Mostrando los últimos 24 meses; la tabla completa se usa internamente para el cálculo.")
+
+    st.subheader("Pesos por categoría (deben sumar 1 dentro de cada eje)")
+    st.caption(
+        "Los pesos se renormalizan automáticamente para sumar 1 si no lo "
+        "hacen — el valor normalizado real usado se muestra abajo de cada columna."
+    )
+
     zscore_window_option = st.radio(
         "Ventana para calcular media/desviación estándar",
         options=["Muestra completa", "Ventana móvil (años)"],
         horizontal=True,
     )
-    if zscore_window_option == "Ventana móvil (años)":
-        zscore_window_years = st.slider("Años de la ventana móvil", 5, 20, 10)
-    else:
-        zscore_window_years = None
+    zscore_window_years = (
+        st.slider("Años de la ventana móvil", 5, 20, 10)
+        if zscore_window_option == "Ventana móvil (años)" else None
+    )
 
-    st.markdown("**Pesos individuales dentro de cada categoría** (se renormalizan automáticamente)")
-    category_weights = {}
     indicator_weights_by_category = {}
-
     cols = st.columns(3)
-    for col, (cat_key, cat_label) in zip(
-        cols, [("growth", "Crecimiento"), ("inflation", "Inflación"), ("employment", "Empleo")]
-    ):
+    for col, cat_key in zip(cols, ["growth", "inflation", "employment"]):
         with col:
-            st.markdown(f"*{cat_label}*")
+            st.markdown(f"**{CATEGORY_LABELS[cat_key]}**")
             weights = {}
             for code, cfg in CATEGORY_DEFINITIONS[cat_key].items():
                 weights[code] = st.number_input(
-                    cfg["label"], min_value=0.0, max_value=5.0, value=1.0, step=0.25,
-                    key=f"w_{cat_key}_{code}",
+                    cfg["label"], min_value=0.0, max_value=1.0, value=round(1 / len(CATEGORY_DEFINITIONS[cat_key]), 2),
+                    step=0.05, key=f"w_{cat_key}_{code}",
                 )
+            total = sum(weights.values())
+            st.caption(f"Suma ingresada: {total:.2f}" + ("" if abs(total - 1.0) < 1e-6 else " → se renormaliza a 1.00"))
             indicator_weights_by_category[cat_key] = weights
 
-    st.markdown("**Pesos entre las 3 categorías para el Z-Score maestro**")
+    st.subheader("Pesos entre las 3 categorías para el Z-Score maestro")
     mc1, mc2, mc3 = st.columns(3)
-    category_weights["growth"] = mc1.number_input("Peso Crecimiento", 0.0, 5.0, 1.0, 0.25)
-    category_weights["inflation"] = mc2.number_input("Peso Inflación", 0.0, 5.0, 1.0, 0.25)
-    category_weights["employment"] = mc3.number_input("Peso Empleo", 0.0, 5.0, 1.0, 0.25)
+    category_weights = {
+        "growth": mc1.number_input("Peso Crecimiento", 0.0, 1.0, 0.2, 0.05),
+        "inflation": mc2.number_input("Peso Inflación", 0.0, 1.0, 0.4, 0.05),
+        "employment": mc3.number_input("Peso Empleo", 0.0, 1.0, 0.4, 0.05),
+    }
+    total_cat = sum(category_weights.values())
+    st.caption(f"Suma ingresada: {total_cat:.2f}" + ("" if abs(total_cat - 1.0) < 1e-6 else " → se renormaliza a 1.00"))
 
-growth_z, growth_table = category_zscore(
-    df, "growth", indicator_weights_by_category["growth"], zscore_window_years
-)
-inflation_z, inflation_table = category_zscore(
-    df, "inflation", indicator_weights_by_category["inflation"], zscore_window_years
-)
-employment_z, employment_table = category_zscore(
-    df, "employment", indicator_weights_by_category["employment"], zscore_window_years
-)
-master_z = master_zscore(growth_z, inflation_z, employment_z, category_weights)
-
-z1, z2, z3, z4 = st.columns(4)
-z1.metric("Z-Score Crecimiento", f"{growth_z.dropna().iloc[-1]:+.2f}")
-z2.metric("Z-Score Inflación", f"{inflation_z.dropna().iloc[-1]:+.2f}")
-z3.metric("Z-Score Empleo", f"{employment_z.dropna().iloc[-1]:+.2f}")
-z4.metric("Z-Score MAESTRO", f"{master_z.dropna().iloc[-1]:+.2f}")
-
-st.info(f"**Lectura cualitativa:** {interpret_zscore(master_z.dropna().iloc[-1])}")
-
-fig_master = go.Figure()
-fig_master.add_trace(go.Scatter(x=master_z.index, y=master_z, name="Z-Score maestro", line=dict(width=2)))
-fig_master.add_trace(go.Scatter(x=growth_z.index, y=growth_z, name="Crecimiento", opacity=0.5))
-fig_master.add_trace(go.Scatter(x=inflation_z.index, y=inflation_z, name="Inflación", opacity=0.5))
-fig_master.add_trace(go.Scatter(x=employment_z.index, y=employment_z, name="Empleo", opacity=0.5))
-fig_master.add_hline(y=0, line_dash="dot", line_color="gray")
-fig_master.add_hline(y=1.5, line_dash="dash", line_color="red", opacity=0.4)
-fig_master.add_hline(y=-1.5, line_dash="dash", line_color="red", opacity=0.4)
-fig_master.update_layout(
-    title="Z-Score maestro y sub-índices a través del tiempo",
-    yaxis_title="Desviaciones estándar", xaxis_title="Fecha",
-    legend=dict(orientation="h", y=-0.2),
-)
-st.plotly_chart(fig_master, use_container_width=True)
-
-with st.expander("Ver detalle de Z-Scores individuales por indicador"):
-    detail_cols = st.columns(3)
-    for col, (label, table) in zip(
-        detail_cols,
-        [("Crecimiento", growth_table), ("Inflación", inflation_table), ("Empleo", employment_table)],
-    ):
+    st.subheader("Evolución histórica por categoría")
+    evo_cols = st.columns(3)
+    for col, cat_key in zip(evo_cols, ["growth", "inflation", "employment"]):
         with col:
-            st.markdown(f"**{label}**")
-            last_row = table.dropna(how="all").iloc[-1].round(2)
-            st.dataframe(last_row.rename("Z-Score"), use_container_width=True)
+            fig = go.Figure()
+            for code, cfg in CATEGORY_DEFINITIONS[cat_key].items():
+                if code in indicator_table.columns:
+                    fig.add_trace(go.Scatter(
+                        x=indicator_table.index, y=indicator_table[code],
+                        name=cfg["label"], opacity=0.8,
+                    ))
+            fig.update_layout(
+                title=CATEGORY_LABELS[cat_key], showlegend=True,
+                legend=dict(orientation="h", y=-0.3), height=320,
+                margin=dict(t=40, b=10),
+            )
+            st.plotly_chart(fig, use_container_width=True)
 
+    st.subheader("Dispersión: ¿se mueven juntos los indicadores?")
+    scatter_cols = st.columns(2)
+    all_codes = {code: cfg["label"] for cat in CATEGORY_DEFINITIONS.values() for code, cfg in cat.items()}
+    with scatter_cols[0]:
+        x_code = st.selectbox("Eje X", options=list(all_codes.keys()), format_func=lambda c: all_codes[c], index=0)
+    with scatter_cols[1]:
+        y_code = st.selectbox("Eje Y", options=list(all_codes.keys()), format_func=lambda c: all_codes[c], index=4)
+    scatter_data = indicator_table[[x_code, y_code]].dropna()
+    fig_scatter = go.Figure(go.Scatter(
+        x=scatter_data[x_code], y=scatter_data[y_code], mode="markers",
+        marker=dict(size=5, opacity=0.5, color=np.arange(len(scatter_data)), colorscale="Viridis"),
+    ))
+    fig_scatter.update_layout(
+        xaxis_title=all_codes[x_code], yaxis_title=all_codes[y_code],
+        title="Color = más reciente (amarillo) vs. más antiguo (morado)",
+    )
+    st.plotly_chart(fig_scatter, use_container_width=True)
+
+# ---------------------------------------------------------------------------
+# Cálculo común (usado en tabs 2 y 3)
+# ---------------------------------------------------------------------------
+category_results = {
+    cat: category_zscore(df, cat, transform_selections, indicator_weights_by_category[cat], zscore_window_years)
+    for cat in ["growth", "inflation", "employment"]
+}
+master = master_zscore(category_results, category_weights)
+
+# =============================================================================
+# TAB 2 — Z-Scores individuales y descomposición por categoría
+# =============================================================================
+with tab2:
+    st.subheader("Z-Score de cada categoría a través del tiempo")
+    fig_cats = go.Figure()
+    for cat_key in ["growth", "inflation", "employment"]:
+        z = category_results[cat_key]["category_zscore"]
+        fig_cats.add_trace(go.Scatter(x=z.index, y=z, name=CATEGORY_LABELS[cat_key]))
+    fig_cats.add_hline(y=0, line_dash="dot", line_color="gray")
+    fig_cats.update_layout(yaxis_title="Desviaciones estándar", legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig_cats, use_container_width=True)
+
+    st.subheader("Descomposición: ¿qué indicador explica la desviación?")
+    decomp_cols = st.columns(2)
+    with decomp_cols[0]:
+        selected_cat = st.selectbox(
+            "Categoría a descomponer", options=["growth", "inflation", "employment"],
+            format_func=lambda c: CATEGORY_LABELS[c],
+        )
+    valid_dates = category_results[selected_cat]["category_zscore"].dropna().index
+    with decomp_cols[1]:
+        selected_date = st.select_slider(
+            "Fecha", options=list(valid_dates), value=valid_dates[-1],
+            format_func=lambda d: d.strftime("%Y-%m-%d"),
+        )
+
+    res = category_results[selected_cat]
+    decomp = decompose_at_date(res["contributions"], res["baseline"], selected_date)
+    decomp_labels = {**{c: cfg["label"] for c, cfg in CATEGORY_DEFINITIONS[selected_cat].items()},
+                      "(ajuste de media histórica)": "(ajuste de media histórica)"}
+    decomp_named = decomp.rename(index=decomp_labels)
+
+    fig_decomp = go.Figure(go.Bar(
+        x=decomp_named.values, y=decomp_named.index, orientation="h",
+        marker_color=["#c5663b" if v < 0 else "#1d6b5a" for v in decomp_named.values],
+    ))
+    fig_decomp.add_vline(x=0, line_color="gray")
+    fig_decomp.update_layout(
+        title=f"Aporte de cada indicador al Z-Score de {CATEGORY_LABELS[selected_cat]} "
+              f"el {selected_date.strftime('%Y-%m-%d')} (suma = {decomp_named.sum():+.2f})",
+        xaxis_title="Aporte en desviaciones estándar",
+    )
+    st.plotly_chart(fig_decomp, use_container_width=True)
+    st.caption(
+        f"Z-Score real de {CATEGORY_LABELS[selected_cat]} en esa fecha: "
+        f"{res['category_zscore'].loc[selected_date]:+.2f} (debe coincidir con la suma de barras)."
+    )
+
+# =============================================================================
+# TAB 3 — Índice global con bandas hawkish/dovish 100% libres
+# =============================================================================
+with tab3:
+    st.subheader("Z-Score maestro a través del tiempo")
+
+    st.caption(
+        "Bandas hawkish/dovish: no existe un umbral 'correcto' validado para "
+        "este caso de uso (la literatura, p. ej. Berge & Jordà 2011, deriva "
+        "umbrales óptimos contra un target específico como recesiones NBER, "
+        "no contra postura de política monetaria). Defínelos tú según tu "
+        "propio criterio o backtesting."
+    )
+    band_cols = st.columns(4)
+    dovish_extreme = band_cols[0].number_input("Dovish extremo (≤)", value=-1.5, step=0.1)
+    dovish_moderate = band_cols[1].number_input("Dovish moderado (≤)", value=-0.5, step=0.1)
+    hawkish_moderate = band_cols[2].number_input("Hawkish moderado (≥)", value=0.5, step=0.1)
+    hawkish_extreme = band_cols[3].number_input("Hawkish extremo (≥)", value=1.5, step=0.1)
+
+    master_series = master["master_zscore"]
+    fig_master = go.Figure()
+    fig_master.add_trace(go.Scatter(x=master_series.index, y=master_series, name="Z-Score maestro", line=dict(width=2, color="#1a1a17")))
+    for cat_key in ["growth", "inflation", "employment"]:
+        z = category_results[cat_key]["category_zscore"]
+        fig_master.add_trace(go.Scatter(x=z.index, y=z, name=CATEGORY_LABELS[cat_key], opacity=0.35))
+    fig_master.add_hline(y=dovish_extreme, line_dash="dash", line_color="#1d6b5a", annotation_text="Dovish extremo")
+    fig_master.add_hline(y=dovish_moderate, line_dash="dot", line_color="#1d6b5a", annotation_text="Dovish moderado")
+    fig_master.add_hline(y=hawkish_moderate, line_dash="dot", line_color="#c5663b", annotation_text="Hawkish moderado")
+    fig_master.add_hline(y=hawkish_extreme, line_dash="dash", line_color="#c5663b", annotation_text="Hawkish extremo")
+    fig_master.update_layout(yaxis_title="Desviaciones estándar", legend=dict(orientation="h", y=-0.2))
+    st.plotly_chart(fig_master, use_container_width=True)
+
+    last_date_master = master_series.dropna().index[-1]
+    last_value = master_series.loc[last_date_master]
+
+    if last_value >= hawkish_extreme:
+        signal = "HAWKISH EXTREMO"
+    elif last_value >= hawkish_moderate:
+        signal = "Hawkish moderado"
+    elif last_value <= dovish_extreme:
+        signal = "DOVISH EXTREMO"
+    elif last_value <= dovish_moderate:
+        signal = "Dovish moderado"
+    else:
+        signal = "Neutral"
+
+    st.metric("Z-Score maestro (última fecha)", f"{last_value:+.2f}", help=f"Fecha: {last_date_master.strftime('%Y-%m-%d')}")
+    st.info(f"**Señal según tus bandas:** {signal}")
+
+    st.subheader("¿Por qué está ahí el índice? Descomposición por categoría")
+    master_decomp = decompose_at_date(master["contributions"], master["baseline"], last_date_master)
+    master_decomp_named = master_decomp.rename(index={**CATEGORY_LABELS, "(ajuste de media histórica)": "(ajuste de media histórica)"})
+
+    fig_master_decomp = go.Figure(go.Bar(
+        x=master_decomp_named.values, y=master_decomp_named.index, orientation="h",
+        marker_color=["#c5663b" if v < 0 else "#1d6b5a" for v in master_decomp_named.values],
+    ))
+    fig_master_decomp.add_vline(x=0, line_color="gray")
+    fig_master_decomp.update_layout(
+        title=f"Aporte de cada categoría al Z-Score maestro (suma = {master_decomp_named.sum():+.2f})",
+        xaxis_title="Aporte en desviaciones estándar",
+    )
+    st.plotly_chart(fig_master_decomp, use_container_width=True)
+
+    dominant_cat = master_decomp.drop("(ajuste de media histórica)").abs().idxmax()
+    st.markdown(f"**La categoría con mayor aporte (en valor absoluto) es: {CATEGORY_LABELS[dominant_cat]}.** Su propia descomposición por indicador:")
+
+    res_dom = category_results[dominant_cat]
+    decomp_dom = decompose_at_date(res_dom["contributions"], res_dom["baseline"], last_date_master)
+    decomp_dom_named = decomp_dom.rename(index={
+        **{c: cfg["label"] for c, cfg in CATEGORY_DEFINITIONS[dominant_cat].items()},
+        "(ajuste de media histórica)": "(ajuste de media histórica)",
+    })
+    fig_dom = go.Figure(go.Bar(
+        x=decomp_dom_named.values, y=decomp_dom_named.index, orientation="h",
+        marker_color=["#c5663b" if v < 0 else "#1d6b5a" for v in decomp_dom_named.values],
+    ))
+    fig_dom.add_vline(x=0, line_color="gray")
+    fig_dom.update_layout(xaxis_title="Aporte en desviaciones estándar", height=300)
+    st.plotly_chart(fig_dom, use_container_width=True)
+
+st.markdown("---")
+st.caption(
+    "Fuente de datos: FRED (Federal Reserve Bank of St. Louis). "
+    "Este panel es un complemento cualitativo y no constituye asesoría de inversión."
+)
