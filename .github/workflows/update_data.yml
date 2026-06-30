@@ -6,6 +6,9 @@ on:
     - cron: "0 13 * * *"
   workflow_dispatch: {}
 
+permissions:
+  contents: write  # necesario para que el job pueda hacer git push del cache
+
 jobs:
   refresh-data:
     runs-on: ubuntu-latest
@@ -33,4 +36,3 @@ jobs:
           git add data/fred_series.parquet
           git diff --cached --quiet || git commit -m "Actualizar datos FRED $(date -u +%Y-%m-%d)"
           git push
-
