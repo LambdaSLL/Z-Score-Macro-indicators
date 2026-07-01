@@ -128,6 +128,19 @@ def fetch_all_series(force_refresh: bool = False) -> pd.DataFrame:
     # análisis pasa a ser el MES.
     df = df.resample("BME").last()
 
+    # Descartar el MES EN CURSO si todavía no termina. resample("BME")
+    # etiqueta cada bucket con el último día hábil del mes, así que en
+    # cuanto hay UN solo dato dentro del mes actual (p. ej. un breakeven
+    # diario del 1 de julio) se crea una fila etiquetada 31-jul construida
+    # con un mes incompleto — y las series mensuales/trimestrales quedan
+    # forward-filled con su valor del mes anterior. Eso produce una fila
+    # "falsa" del mes en curso. Se elimina cualquier fila cuya etiqueta de
+    # fin de mes caiga en el mes actual o después: solo se conservan meses
+    # ya cerrados.
+    today = pd.Timestamp.now().normalize()
+    current_month_start = today.replace(day=1)
+    df = df[df.index < current_month_start]
+
     # CPIAUCSL, CPILFESL, PCEPI y PCEPILFE vienen como NIVELES de índice, no
     # como tasas de inflación. Se agregan columnas derivadas con la
     # variación interanual (%) — ahora con 12 períodos mensuales = 1 año.
