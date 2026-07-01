@@ -203,12 +203,35 @@ with col2:
 # ---------------------------------------------------------------------------
 st.header("2. Regla de Taylor con tu calibración")
 
+st.markdown(
+    "La regla implementada es la especificación generalizada del Anexo A1 "
+    "de Marín & Chacón (pesos libres en vez de fijos en 0.5). Aplica a la "
+    "**parte corta** de la curva: describe el nivel neutral de la *tasa de "
+    "política de la Fed* (Fed Funds, overnight), no una tasa a 2 o 10 años."
+)
+st.latex(r"r_o = r^{*} + \pi_e + w_y\,(\text{brecha}_\text{producto}) + w_\pi\,(\pi_e - \pi_{\text{meta}})")
+
 current_inflation = latest_value(df, inflation_measure)
 current_fedfunds = latest_value(df, "FEDFUNDS")
 
 current_taylor = taylor_rate(current_inflation, selected_gap_value, params)
 gap_vs_fed = current_taylor - current_fedfunds
 signal = qualitative_signal(gap_vs_fed)
+
+# Ecuación con los valores actuales sustituidos, para trazar de dónde sale cada número
+_infl_gap = current_inflation - params.inflation_target
+st.latex(
+    rf"r_o = {params.r_star:.2f} + {current_inflation:.2f} "
+    rf"+ {params.weight_output_gap:.2f}\cdot({selected_gap_value:+.2f}) "
+    rf"+ {params.weight_inflation_gap:.2f}\cdot({current_inflation:.2f} - {params.inflation_target:.2f}) "
+    rf"= {current_taylor:.2f}\%"
+)
+st.caption(
+    f"Donde r* = {params.r_star:.2f}% (tasa real neutral de corto plazo, tu "
+    f"calibración), πe = {current_inflation:.2f}% (inflación esperada, medida "
+    f"'{inflation_measure}'), brecha de producto = {selected_gap_value:+.2f}% "
+    f"({output_gap_method}), y meta de inflación = {params.inflation_target:.2f}%."
+)
 
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("Inflación esperada usada", f"{current_inflation:.2f}%")
@@ -595,5 +618,3 @@ st.caption(
     "Fuente de datos: FRED (Federal Reserve Bank of St. Louis). "
     "Este panel es un complemento cualitativo y no constituye asesoría de inversión."
 )
-
-
