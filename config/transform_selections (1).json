@@ -1,0 +1,97 @@
+{
+  "generated_at": "2026-07-01T15:47:40.195056+00:00",
+  "fred_data_through": "2026-07-31",
+  "selections": {
+    "GDPC1": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "inconclusive",
+      "adf_pvalue": 9.736372984609826e-06,
+      "kpss_pvalue": 0.018258679634272402
+    },
+    "INDPRO": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "stationary",
+      "adf_pvalue": 6.576033919143586e-10,
+      "kpss_pvalue": 0.08931203736824692
+    },
+    "RSAFS": {
+      "chosen_transform": "yoy",
+      "indicator_type": "index",
+      "verdict": "stationary",
+      "adf_pvalue": 0.0015705392146507782,
+      "kpss_pvalue": 0.1
+    },
+    "CUMFNS": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 1.5368637781674326e-10,
+      "kpss_pvalue": 0.1
+    },
+    "CPIAUCSL_YOY": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 1.2595766702843749e-13,
+      "kpss_pvalue": 0.1
+    },
+    "PCEPI_YOY": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 4.873679585496703e-11,
+      "kpss_pvalue": 0.1
+    },
+    "T5YIE": {
+      "chosen_transform": "level",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 0.0011118734940077143,
+      "kpss_pvalue": 0.1
+    },
+    "T10YIE": {
+      "chosen_transform": "level",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 0.001508981593357936,
+      "kpss_pvalue": 0.1
+    },
+    "MICH": {
+      "chosen_transform": "diff",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 3.275075352940825e-05,
+      "kpss_pvalue": 0.1
+    },
+    "PAYEMS": {
+      "chosen_transform": "diff",
+      "indicator_type": "index",
+      "verdict": "stationary",
+      "adf_pvalue": 3.9093395704668824e-11,
+      "kpss_pvalue": 0.1
+    },
+    "UNRATE": {
+      "chosen_transform": "level",
+      "indicator_type": "rate",
+      "verdict": "stationary",
+      "adf_pvalue": 0.0017479715985172627,
+      "kpss_pvalue": 0.07781823046923683
+    },
+    "ICSA": {
+      "chosen_transform": "level",
+      "indicator_type": "index",
+      "verdict": "stationary",
+      "adf_pvalue": 1.3864065816629532e-16,
+      "kpss_pvalue": 0.1
+    },
+    "AHETPI": {
+      "chosen_transform": "logdiff",
+      "indicator_type": "index",
+      "verdict": "non_stationary",
+      "adf_pvalue": 0.688626907762324,
+      "kpss_pvalue": 0.01
+    }
+  }
+}
